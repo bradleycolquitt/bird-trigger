@@ -1,0 +1,8 @@
+## Definition
+From intiial screenshot, target location and background features
+function: Capture screen every 100 ms (variable)
+function: Compute average pixel values in target
+function: If over threshold, trigger playback
+
+playback modified from Jeff's 
+
