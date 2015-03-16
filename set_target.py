@@ -1,25 +1,156 @@
 import sys
-import numpy as np
+
+import Tkinter as tk
 import cv2
 import easygui
 import pdb
 
+import numpy as np
+import multiprocessing as mp
+
 import pyaudio
 import wave
 
-def capture_grey(cap):
-    ret,frame = cap.read()
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return ret,frame
+"""
+## Classes:
+
+# mainImage
+#    contains video feed and dictionary of Targets
+#    image is subprocessed to each target and processed independently
+#    contains Logger to record threshold events and events Triggered
+
+Gui
+
+# Target
+#    contains roi and functions to analyze pixels within roi
+#    specification of TriggerEvent
+#    function to run 2 subprocesses
+#       1. real-time compute of ROI stats and updates buffer
+#           if pixel means over threshold
+#              add value to buffer
+#              if time_increment: 
+#                  check if buffer mean over thresh
+#       2. subprocess that periodically checks if buffer over some threshold
+
+TriggerEvent
+       contains multiple functions for possible output events 
+
+Protocol 
+Initialize main feed
+Take background image
+Define target regions on image
+    Load config file containing
+        buffer size
+        time period
+        number events per time period
+             or 
+        number events before refractory
+        datetime active 
+        
+    Specify TriggerEvent
+
+"""
+class TriggerGui:
+    def __init__(self):
+        self.main = tk.Tk()
+        self.mainfeed = None
+
+        start_feed_button = tk.Button(self.main, text="Start feed", 
+                                       command=self.start_feed)
+        add_target_button = tk.Button(self.main, text= "Add target manually",
+                                      command=self.launch_target_window)
+        start_targets_button = tk.Button(self.main, text="Start target monitoring",
+                                          command=self.start_targets)
+        start_feed_button.grid(row=0,column=0)
+        add_target_button.grid(row=1,column=0)
+        start_targets_button.grid(row=2,column=0)
+        self.main.mainloop()
+
+    def start_feed(self):
+        self.mainfeed = MainFeed()
+
+    def launch_target_window(self):
+        targetgui = TargetGui(self)
+
+    def start_targets(self):
+        self.mainfeed.start_targets()
+
+class TargetGui:
+    def __init__(self, parent):
+        self.parent = parent
+        self.target_name = None
+        self.gui = tk.Tk()
+        self.label = tk.Label(self.gui, text="Target name")
+        self.entry = tk.Entry(self.gui, variable=self.target_name)
+        self.button = tk.Button(self.gui, text="OK", command=self.define_target)
+
+        self.label.pack()
+        self.entry.pack()
+        self.button.pack()
+
+        self.gui.mainloop()
+
+    def define_target(self):
+        self.parent.mainfeed.add_target(self.entry.get())
+        self.gui.destroy()
+
+class MainFeed:
+    def __init__(self):
+        self.window_name = "MainFeed"
+        self.frame = None
+        self.gui = None
+        self.targets = {}
+        self.cap = cv2.VideoCapture(0)
+        cv2.namedWindow(self.window_name)    
+        
+        ## Take initial image
+        while(1):
+            ret,self.frame = capture_grey(self.cap)
+            if ret:
+                cv2.imshow(self.window_name,self.frame)
+                k = cv2.waitKey(60) & 0xFF
+                if k == 13:
+                    break
+        self.cap.release()
+
+    def add_target(self, target_name):
+        ## Target definition
+        if not target_name in self.targets:
+            target = Target(self.window_name, self.frame)
+            cv2.setMouseCallback(self.window_name,target.draw_rectangle)
+            while(1):
+                cv2.imshow(self.window_name,self.frame)
+                k = cv2.waitKey(60) & 0xFF
+                if k == 27: # ESC pressed
+                    break
+                    return 1
+                elif k == 13: # Enter pressed
+                    cv2.setMouseCallback(self.window_name,target.mouse_none)
+                    self.targets[target_name] = target
+                    print target.get_target_coords()
+                    return 0
+        else:
+            print "Target name exists. Choose another."
+            return 1
+
+    def start_targets(self):
+        pool = mp.Pool(len(self.targets))
+        pool.map(start_targets_worker, self.targets.itervalues())
+        #start_targets_worker(self.targets.itervalues().next())
+
+def start_targets_worker(target):
+    target.check_target()
 
 class Target:
-    def __init__(self):
-        self.frame = ""
+    def __init__(self, window_name, frame):
+        self.window_name = window_name
+        self.frame = frame
         self.ix, self.iy, self.fx, self.fy = -1,-1,-1,-1
+        self.thresh = 100
     
     def draw_rectangle(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            cv2.imshow("image",self.frame)
+            cv2.imshow(self.window_name,self.frame)
             self.ix,self.iy = x,y
 
         elif event == cv2.EVENT_LBUTTONUP:
@@ -40,56 +171,39 @@ class Target:
         coords = self.get_target_coords()
         return self.frame[coords[0]:coords[2], coords[1]:coords[3]]
 
-    def set_target(self):       
-        cap = cv2.VideoCapture(0)              # Initialize camera
-        cv2.namedWindow('image')    
-
-        ## Take initial image
-        while(1):
-            ret,self.frame = capture_grey(cap)
-            if ret:
-                cv2.imshow("image",self.frame)
-                k = cv2.waitKey(60) & 0xFF
-                if k == 13:
-                    break
-        cap.release()
-
-        ## Target definition
-        cv2.setMouseCallback('image',self.draw_rectangle)
-        while(1):
-            cv2.imshow('image',self.frame)
-            k = cv2.waitKey(60) & 0xFF
-            if k == 27:
-                break
-            elif k == 13: # Enter has been pressed
-                cv2.setMouseCallback('image',self.mouse_none)
-                return self.get_target_coords()
-
     # TODO buffer roi mean to prevent spurious triggering
-    def check_roi(self, thresh):
+    def check_target(self):
         """Continually compute the mean pixel value within defined target
         Trigger sound playback whenever mean exceeds threshold 
         """
 
-        cs = target_obj.get_target_coords()
+        cs = self.get_target_coords()
         cap = cv2.VideoCapture(0)      
 
         while(1):
-            ret,frame = capture_grey(cap)
+            ret,self.frame = capture_grey(cap)
 
-            cv2.rectangle(frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
-            cv2.imshow('image', frame)
+            cv2.rectangle(self.frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
+            cv2.imshow(self.window_name, self.frame)
 
-            roi_mean = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
+            roi_mean = np.mean(np.mean(self.frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
             print roi_mean
-            if roi_mean > thresh:
+            if roi_mean > self.thresh:
                 print "Trigger", roi_mean
-                trigger_playback()
+                self.trigger_event()
             
             k = cv2.waitKey(200) & 0xFF
             if k == 27:
                 cv2.destroyAllWindows()
                 break
+
+    def trigger_event(self):
+        pass
+
+def capture_grey(cap):
+    ret,frame = cap.read()
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return ret,frame
     
 def test_roi(target_obj):
     cs = target_obj.get_target_coords()
@@ -106,6 +220,7 @@ def test_roi(target_obj):
         if k == 27:
             cv2.destroyAllWindows()
             break
+
 
 def trigger_playback():
     chunk = 1024
