@@ -61,9 +61,12 @@ class TriggerGui:
                                       command=self.launch_target_window)
         start_targets_button = tk.Button(self.main, text="Start target monitoring",
                                           command=self.start_targets)
+        stop_targets_button = tk.Button(self.main, text="Stop target monitoring",
+                                          command=self.stop_targets)
         start_feed_button.grid(row=0,column=0)
         add_target_button.grid(row=1,column=0)
         start_targets_button.grid(row=2,column=0)
+        stop_targets_button.grid(row=3,column=0)
         self.main.mainloop()
 
     def start_feed(self):
@@ -74,6 +77,9 @@ class TriggerGui:
 
     def start_targets(self):
         self.mainfeed.start_targets()
+        
+    def stop_targets(self):
+        self.mainfeed.stop_targets()
 
 class TargetGui:
     def __init__(self, parent):
@@ -111,12 +117,12 @@ class MainFeed:
                 k = cv2.waitKey(60) & 0xFF
                 if k == 13:
                     break
-        self.cap.release()
+        #self.cap.release()
 
     def add_target(self, target_name):
         ## Target definition
         if not target_name in self.targets:
-            target = Target(self.window_name, self.frame)
+            target = Target(self.window_name, target_name, self.frame)
             cv2.setMouseCallback(self.window_name,target.draw_rectangle)
             while(1):
                 cv2.imshow(self.window_name,self.frame)
@@ -133,17 +139,37 @@ class MainFeed:
             print "Target name exists. Choose another."
             return 1
 
+    ## TODO get multiprocessing to work
     def start_targets(self):
-        pool = mp.Pool(len(self.targets))
-        pool.map(start_targets_worker, self.targets.itervalues())
-        #start_targets_worker(self.targets.itervalues().next())
+        self.camera_process = mp.Process(target=self.start_targets_worker)
+        self.camera_process.start()
+        
+    def stop_targets(self):
+        if not self.camera_process == None:
+            self.camera_process.join()
+        else:
+            print "Monitoring not running."
 
-def start_targets_worker(target):
-    target.check_target()
+    def start_targets_worker(self):
+        while(1):
+            ret,self.frame = capture_grey(self.cap)
+            if ret:
+                cv2.imshow(self.window_name, self.frame)
+                [target.check_target(self.frame) 
+                      for target in self.targets.itervalues()]
+        #pool = mp.Pool(len(self.targets))
+        #pool.map(start_targets_worker, self.targets.itervalues())
+    #                start_targets_worker(self.targets.itervalues().next(), self)
+                k = cv2.waitKey(200) & 0xFF
+                if k == 27:
+                    cv2.destroyAllWindows()
+                    break
+    
 
 class Target:
-    def __init__(self, window_name, frame):
+    def __init__(self, window_name, target_name, frame):
         self.window_name = window_name
+        self.target_name = target_name
         self.frame = frame
         self.ix, self.iy, self.fx, self.fy = -1,-1,-1,-1
         self.thresh = 100
@@ -172,37 +198,30 @@ class Target:
         return self.frame[coords[0]:coords[2], coords[1]:coords[3]]
 
     # TODO buffer roi mean to prevent spurious triggering
-    def check_target(self):
+    def check_target(self, frame):
         """Continually compute the mean pixel value within defined target
         Trigger sound playback whenever mean exceeds threshold 
         """
-
         cs = self.get_target_coords()
-        cap = cv2.VideoCapture(0)      
 
-        while(1):
-            ret,self.frame = capture_grey(cap)
+        cv2.rectangle(frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
+        #cv2.imshow(self.window_name, frame)
 
-            cv2.rectangle(self.frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
-            cv2.imshow(self.window_name, self.frame)
+        roi_mean = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
+        print roi_mean
+        if roi_mean > self.thresh:
+            print "Trigger:",self.target_name, roi_mean
+            self.trigger_event()
 
-            roi_mean = np.mean(np.mean(self.frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
-            print roi_mean
-            if roi_mean > self.thresh:
-                print "Trigger", roi_mean
-                self.trigger_event()
-            
-            k = cv2.waitKey(200) & 0xFF
-            if k == 27:
-                cv2.destroyAllWindows()
-                break
+        
 
     def trigger_event(self):
         pass
 
 def capture_grey(cap):
     ret,frame = cap.read()
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if ret: 
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return ret,frame
     
 def test_roi(target_obj):
