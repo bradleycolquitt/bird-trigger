@@ -1,1 +1,47 @@
-test
+
+* TODO Buffer video feed
+** Sample every 500 ms
+** If mean of buffer > thresh: trigger
+* TODO Set up config file read
+* TODO More triggerevent options
+** Save video and pad if trigger
+
+
+## Classes:
+
+TriggerGui
+TargetGui
+
+MainFeed
+    contains video feed and dictionary of Targets
+    image is subprocessed to each target and processed independently
+    contains Logger to record threshold events and events Triggered
+
+
+Target
+   contains roi and functions to analyze pixels within roi
+   specification of TriggerEvent
+   function to run 2 subprocesses
+      1. real-time compute of ROI stats and updates buffer
+          if pixel means over threshold
+             add value to buffer
+             if time_increment: 
+                 check if buffer mean over thresh
+      2. subprocess that periodically checks if buffer over some threshold
+
+TriggerEvent
+       contains multiple functions for possible output events 
+
+## Protocol 
+   Initialize main feed
+   Take background image
+   Define target regions on image
+   Load config file containing
+        buffer size
+        time period
+        number events per time period
+             or 
+        number events before refractory
+        datetime active 
+        
+   Specify TriggerEvent

@@ -17,34 +17,48 @@ import multiprocessing as mp
 
 PLATFORM=sys.platform
 ENTER=13
-
+ESC=27
 if PLATFORM == "linux2":
     ENTER = 10
 
-class TriggerGui:
+class SuperGui(tk.Frame):
     def __init__(self):
-        global PLATFORM
-        PLATFORM = sys.platform
-
         self.main = tk.Tk()
-        self.mainfeed = None
+        self.superfeed = SuperFeed()
+        #self.mainfeed = None
 
         start_feed_button = tk.Button(self.main, text="Start feed", 
                                        command=self.start_feed)
-        add_target_button = tk.Button(self.main, text= "Add target manually",
-                                      command=self.launch_target_window)
-        start_targets_button = tk.Button(self.main, text="Start target monitoring",
-                                          command=self.start_targets)
-        stop_targets_button = tk.Button(self.main, text="Stop target monitoring",
-                                          command=self.stop_targets)
-        start_feed_button.grid(row=0,column=0)
-        add_target_button.grid(row=1,column=0)
-        start_targets_button.grid(row=2,column=0)
-        stop_targets_button.grid(row=3,column=0)
+        self.device_entry = tk.Entry(self.main)
+        self.feed_name_entry = tk.Entry(self.main)
+        self.device_label = tk.Label(self.main, text="Device")
+        self.feed_name_label = tk.Label(self.main, text="Feed name")
+        # add_target_button = tk.Button(self.main, text= "Add target manually",
+        #                               command=self.launch_target_window)
+        # start_targets_button = tk.Button(self.main, text="Start target monitoring",
+        #                                   command=self.start_targets)
+        # stop_targets_button = tk.Button(self.main, text="Stop target monitoring",
+        #                                   command=self.stop_targets)
+        start_feed_button.grid(row=1,column=0)
+        self.feed_name_entry.grid(row=1,column=1)
+        self.feed_name_label.grid(row=0,column=1)
+        self.device_label.grid(row=0,column=2)
+        self.device_entry.grid(row=1,column=2)
+
         self.main.mainloop()
 
     def start_feed(self):
-        self.mainfeed = MainFeed()
+        feed_name = self.feed_name_entry.get()
+        device = self.device_entry.get()
+        self.superfeed.add_feed(feed_name, device)
+
+        try:
+            self.superfeed.feeds[device].start_feed()
+            feedgui = FeedGui(self, self.superfeed.feeds[device])
+        except KeyError:
+            print "Feed initialization failed."
+        #self.superfeed.add_feed()
+        #self.mainfeed = MainFeed()
 
     def launch_target_window(self):
         targetgui = TargetGui(self)
@@ -54,6 +68,36 @@ class TriggerGui:
 
     def stop_targets(self):
         self.mainfeed.stop_targets()
+
+class FeedGui:
+    def __init__(self, parent, feed):
+        #pdb.set_trace()
+        self.parent = parent
+        self.feed = feed
+        self.main = tk.Toplevel()
+
+        add_target_button = tk.Button(self.main, text= "Add target manually",
+                                      command=self.launch_target_window)
+        start_targets_button = tk.Button(self.main, text="Start target monitoring",
+                                          command=self.start_targets)
+        stop_targets_button = tk.Button(self.main, text="Stop target monitoring",
+                                          command=self.stop_targets)
+        #start_feed_button.grid(row=0,column=0)
+        #self.start_feed_entry.grid(row=0,column=1)
+        add_target_button.grid(row=1,column=0)
+        start_targets_button.grid(row=2,column=0)
+        stop_targets_button.grid(row=3,column=0)
+
+        #self.main.mainloop()
+
+    def launch_target_window(self):
+        targetgui = TargetGui(self)
+
+    def start_targets(self):
+        self.feed.start_targets()
+
+    def stop_targets(self):
+        self.feed.stop_targets()
 
 class TargetGui:
     def __init__(self, parent):
@@ -73,40 +117,71 @@ class TargetGui:
     def define_target(self):
         self.parent.mainfeed.add_target(self.entry.get())
         self.gui.quit()
-        self.gui.destroy()
+        #self.gui.destroy()
+
+class SuperFeed:
+    def __init__(self):
+        self.window_name = "SuperFeed"
+        self.feeds = {}
+
+    def add_feed(self, feed_name, device):
+        self.feeds[device] = MainFeed(feed_name, device)
+
+    def start_all_feeds(self):
+        while True:
+            for feed in self.feeds.itervalues():
+                ret, frame = feed.read()
+                if ret:
+                    cv2.imshow(feed.window_name, frame)
+            k = cv2.waitKey(1) & 0xFF
+            if k == ESC: break
+
+    def start_all_targets(self):
+        while True:
+            for feed in self.feeds.itervalues():
+                ret, frame = feed.read()
+                if ret:
+                    cv2.imshow(feed.window_name, frame)
+                    feed.read_targets()
+            k = cv2.waitKey(1) & 0xFF
+            if k == ESC: break
 
 class MainFeed:
-    def __init__(self):
-        self.window_name = "MainFeed"
+    def __init__(self, feed_name, device=0):
+        self.window_name = feed_name
         self.frame = None
         self.gui = None
         self.targets = {}
-        self.cap = cv2.VideoCapture(0)
-        cv2.namedWindow(self.window_name)
+        self.cap = cv2.VideoCapture(device)
+        #cv2.namedWindow(self.window_name)
 
-        ## Take initial image
+    def start_feed(self):
         while(1):
             ret,self.frame = capture_grey(self.cap)
             if ret:
                 cv2.imshow(self.window_name,self.frame)
                 k = cv2.waitKey(60) & 0xFF
-                if k == ENTER:
+                if k == ENTER or k == ESC:
                     break
-        #self.cap.release()
+
+    def read(self):
+        ret, self.frame = capture_grey(self.cap)
+        #ret, self.frame = self.cap.read()
+        return ret,self.frame
 
     def add_target(self, target_name):
-        ## Target definition
+    """Allows user to define target region using mouse"""
         if not target_name in self.targets:
             target = Target(self.window_name, target_name, self.frame)
             cv2.setMouseCallback(self.window_name,target.draw_rectangle)
             while(1):
                 cv2.imshow(self.window_name,self.frame)
                 k = cv2.waitKey(60) & 0xFF
-                if k == 27: # ESC pressed
+                if k == ESC:
                     break
-                    return 1
-                elif k == ENTER: # Enter pressed
-                    #                cv2.setMouseCallback(self.window_name,target.mouse_none)
+                    #return 1
+                elif k == ENTER:
+                    cv2.setMouseCallback(self.window_name,target.mouse_none)
                     self.targets[target_name] = target
                     print target.get_target_coords()
                     return 0
@@ -116,9 +191,19 @@ class MainFeed:
 
     ## TODO get multiprocessing to work
     def start_targets(self):
-        self.camera_process = mp.Process(target=self.start_targets_worker)
-        self.camera_process.start()
-        
+        while(1):
+            ret,self.frame = capture_grey(self.cap)
+            if ret:
+                cv2.imshow(self.window_name, self.frame)
+                self.read_targets()
+                #[target.check_target(self.frame)
+                #      for target in self.targets.itervalues()]
+
+            k = cv2.waitKey(1) & 0xFF
+            if k == 27:
+                break
+        #cv2.destroyAllWindows()
+
     def stop_targets(self):
         if not self.camera_process == None:
             self.camera_process.join()
@@ -130,7 +215,7 @@ class MainFeed:
             ret,self.frame = capture_grey(self.cap)
             if ret:
                 cv2.imshow(self.window_name, self.frame)
-                [target.check_target(self.frame) 
+                [target.check_target(self.frame)
                       for target in self.targets.itervalues()]
         #pool = mp.Pool(len(self.targets))
         #pool.map(start_targets_worker, self.targets.itervalues())
@@ -139,7 +224,10 @@ class MainFeed:
                 if k == 27:
                     cv2.destroyAllWindows()
                     break
-    
+    def read_targets(self):
+        [target.check_target(self.frame)
+                      for target in self.targets.itervalues()]
+
 
 class Target:
     def __init__(self, window_name, target_name, frame):
