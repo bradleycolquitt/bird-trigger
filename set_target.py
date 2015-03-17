@@ -2,56 +2,30 @@ import sys
 
 import Tkinter as tk
 import cv2
-import easygui
+#import easygui
 import pdb
 
 import numpy as np
 import multiprocessing as mp
 
-import pyaudio
-import wave
+#import pyaudio
+#import wave
 
 """
-## Classes:
-
-# mainImage
-#    contains video feed and dictionary of Targets
-#    image is subprocessed to each target and processed independently
-#    contains Logger to record threshold events and events Triggered
-
-Gui
-
-# Target
-#    contains roi and functions to analyze pixels within roi
-#    specification of TriggerEvent
-#    function to run 2 subprocesses
-#       1. real-time compute of ROI stats and updates buffer
-#           if pixel means over threshold
-#              add value to buffer
-#              if time_increment: 
-#                  check if buffer mean over thresh
-#       2. subprocess that periodically checks if buffer over some threshold
-
-TriggerEvent
-       contains multiple functions for possible output events 
-
-Protocol 
-Initialize main feed
-Take background image
-Define target regions on image
-    Load config file containing
-        buffer size
-        time period
-        number events per time period
-             or 
-        number events before refractory
-        datetime active 
-        
-    Specify TriggerEvent
 
 """
+
+PLATFORM=sys.platform
+ENTER=13
+
+if PLATFORM == "linux2":
+    ENTER = 10
+
 class TriggerGui:
     def __init__(self):
+        global PLATFORM
+        PLATFORM = sys.platform
+
         self.main = tk.Tk()
         self.mainfeed = None
 
@@ -77,7 +51,7 @@ class TriggerGui:
 
     def start_targets(self):
         self.mainfeed.start_targets()
-        
+
     def stop_targets(self):
         self.mainfeed.stop_targets()
 
@@ -98,6 +72,7 @@ class TargetGui:
 
     def define_target(self):
         self.parent.mainfeed.add_target(self.entry.get())
+        self.gui.quit()
         self.gui.destroy()
 
 class MainFeed:
@@ -107,15 +82,15 @@ class MainFeed:
         self.gui = None
         self.targets = {}
         self.cap = cv2.VideoCapture(0)
-        cv2.namedWindow(self.window_name)    
-        
+        cv2.namedWindow(self.window_name)
+
         ## Take initial image
         while(1):
             ret,self.frame = capture_grey(self.cap)
             if ret:
                 cv2.imshow(self.window_name,self.frame)
                 k = cv2.waitKey(60) & 0xFF
-                if k == 13:
+                if k == ENTER:
                     break
         #self.cap.release()
 
@@ -130,8 +105,8 @@ class MainFeed:
                 if k == 27: # ESC pressed
                     break
                     return 1
-                elif k == 13: # Enter pressed
-                    cv2.setMouseCallback(self.window_name,target.mouse_none)
+                elif k == ENTER: # Enter pressed
+                    #                cv2.setMouseCallback(self.window_name,target.mouse_none)
                     self.targets[target_name] = target
                     print target.get_target_coords()
                     return 0
@@ -173,6 +148,8 @@ class Target:
         self.frame = frame
         self.ix, self.iy, self.fx, self.fy = -1,-1,-1,-1
         self.thresh = 100
+        self.buffer_size = 10
+        self.buffer = np.zeros(self.buffer_size)
     
     def draw_rectangle(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -207,13 +184,14 @@ class Target:
         cv2.rectangle(frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
         #cv2.imshow(self.window_name, frame)
 
-        roi_mean = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
-        print roi_mean
-        if roi_mean > self.thresh:
-            print "Trigger:",self.target_name, roi_mean
-            self.trigger_event()
+        #roi_mean = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
+        self.buffer = np.roll(self.buffer, -1)
+        self.buffer[-1] = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
+        buffer_mean = np.mean(self.buffer)
 
-        
+        if buffer_mean < self.thresh:
+            print "Trigger:",self.target_name, buffer_mean
+            self.trigger_event()
 
     def trigger_event(self):
         pass
