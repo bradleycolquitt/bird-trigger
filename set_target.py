@@ -25,7 +25,6 @@ class SuperGui(tk.Frame):
     def __init__(self):
         self.main = tk.Tk()
         self.superfeed = SuperFeed()
-        #self.mainfeed = None
 
         start_feed_button = tk.Button(self.main, text="Start feed", 
                                        command=self.start_feed)
@@ -33,12 +32,7 @@ class SuperGui(tk.Frame):
         self.feed_name_entry = tk.Entry(self.main)
         self.device_label = tk.Label(self.main, text="Device")
         self.feed_name_label = tk.Label(self.main, text="Feed name")
-        # add_target_button = tk.Button(self.main, text= "Add target manually",
-        #                               command=self.launch_target_window)
-        # start_targets_button = tk.Button(self.main, text="Start target monitoring",
-        #                                   command=self.start_targets)
-        # stop_targets_button = tk.Button(self.main, text="Stop target monitoring",
-        #                                   command=self.stop_targets)
+
         start_feed_button.grid(row=1,column=0)
         self.feed_name_entry.grid(row=1,column=1)
         self.feed_name_label.grid(row=0,column=1)
@@ -123,18 +117,59 @@ class SuperFeed:
     def __init__(self):
         self.window_name = "SuperFeed"
         self.feeds = {}
+        self.feeds_active = set()
+        self.p = None
 
     def add_feed(self, feed_name, device):
-        self.feeds[device] = MainFeed(feed_name, device)
+        self.feeds[device] = MainFeed(self, feed_name, device)
+
+    def deactivate_all_feeds(self):
+        self.feeds_active.clear()
 
     def start_all_feeds(self):
+        if not self.p == None:
+            self.stop_feeds()
+        self.queue = mp.Queue()
+        self.p = mp.Process(target=self._start_all_feeds)
+        self.p.start()
+
+        while (self.p.is_alive()):
+            pass
+           # print self.queue.get()
+
+    def _start_all_feeds(self):
         while True:
             for feed in self.feeds.itervalues():
                 ret, frame = feed.read()
                 if ret:
+                    feed.read_targets(self.queue)
                     cv2.imshow(feed.window_name, frame)
             k = cv2.waitKey(1) & 0xFF
             if k == ESC: break
+
+    def start_subset_feeds(self):
+        if not self.p == None:
+            self.stop_feeds()
+        self.queue = mp.Queue()
+        self.p = mp.Process(target=self._start_subset_feeds, args=(self.queue,))
+        self.p.start()
+
+        while (self.p.is_alive()):
+            print self.queue.get()
+
+
+    def _start_subset_feeds(self, queue):
+        if len(self.feeds_active) > 0:
+            while True:
+                for device in self.feeds_active:
+                    ret, frame = self.feeds[device].read()
+                    if ret:
+                        feed.read_targets()
+                        cv2.imshow(self.feeds[device].window_name, frame)
+                k = cv2.waitKey(1) & 0xFF
+                if k == ESC: break
+        else:
+            print "No feeds active."
 
     def start_all_targets(self):
         while True:
@@ -146,31 +181,59 @@ class SuperFeed:
             k = cv2.waitKey(1) & 0xFF
             if k == ESC: break
 
+    def stop_feeds(self):
+        self.p.terminate()
+        self.p = None
+
+    def remove_feed(self, device):
+        self.feeds[device] = None
+
 class MainFeed:
-    def __init__(self, feed_name, device=0):
+    def __init__(self, parent, feed_name, device=0):
+        self.parent = parent
         self.window_name = feed_name
+        self.device = device
         self.frame = None
         self.gui = None
         self.targets = {}
+        self.targets_active = False
         self.cap = cv2.VideoCapture(device)
-        #cv2.namedWindow(self.window_name)
+
+    def read(self):
+        ret, self.frame = capture_grey(self.cap)
+        return ret, self.frame
+
+    def activate_feed(self):
+        if not self.device in self.parent.feeds_active:
+            self.parent.feeds_active.add(self.device)
+            return 0
+        else:
+            return 1
+
+    def deactivate_feed(self):
+        try:
+            self.parent.feeds_active.remove(self.device)
+            return 0
+        except KeyError:
+            return 1
+
+    def activate_targets(self):
+         self.targets_active = True
+
+    def deactivate_targets(self):
+         self.targets_active = False
 
     def start_feed(self):
         while(1):
             ret,self.frame = capture_grey(self.cap)
             if ret:
                 cv2.imshow(self.window_name,self.frame)
-                k = cv2.waitKey(60) & 0xFF
-                if k == ENTER or k == ESC:
-                    break
-
-    def read(self):
-        ret, self.frame = capture_grey(self.cap)
-        #ret, self.frame = self.cap.read()
-        return ret,self.frame
+            k = cv2.waitKey(50) & 0xFF
+            if k == ENTER or k == ESC:
+                break
 
     def add_target(self, target_name):
-    """Allows user to define target region using mouse"""
+        """Allows user to define target region using mouse"""
         if not target_name in self.targets:
             target = Target(self.window_name, target_name, self.frame)
             cv2.setMouseCallback(self.window_name,target.draw_rectangle)
@@ -189,20 +252,23 @@ class MainFeed:
             print "Target name exists. Choose another."
             return 1
 
-    ## TODO get multiprocessing to work
+    def define_target(self, target_name, positions):
+        if not target_name in self.targets:
+            target = Target(self.window_name, target_name, self.frame)
+            target.set_target_coords(positions)
+            self.targets[target_name] = target
+        else:
+            print "Target name exists. Choose another."
+
     def start_targets(self):
         while(1):
             ret,self.frame = capture_grey(self.cap)
             if ret:
                 cv2.imshow(self.window_name, self.frame)
-                self.read_targets()
-                #[target.check_target(self.frame)
-                #      for target in self.targets.itervalues()]
-
-            k = cv2.waitKey(1) & 0xFF
-            if k == 27:
+                self.read_targets(mp.Queue)
+            k = cv2.waitKey(50) & 0xFF
+            if k == ESC:
                 break
-        #cv2.destroyAllWindows()
 
     def stop_targets(self):
         if not self.camera_process == None:
@@ -217,17 +283,16 @@ class MainFeed:
                 cv2.imshow(self.window_name, self.frame)
                 [target.check_target(self.frame)
                       for target in self.targets.itervalues()]
-        #pool = mp.Pool(len(self.targets))
-        #pool.map(start_targets_worker, self.targets.itervalues())
-    #                start_targets_worker(self.targets.itervalues().next(), self)
                 k = cv2.waitKey(200) & 0xFF
                 if k == 27:
                     cv2.destroyAllWindows()
                     break
-    def read_targets(self):
-        [target.check_target(self.frame)
-                      for target in self.targets.itervalues()]
 
+    def read_targets(self, queue):
+        if self.targets_active:
+            for target in self.targets.itervalues():
+                val = target.check_target(self.frame)
+                queue.put(val)
 
 class Target:
     def __init__(self, window_name, target_name, frame):
@@ -251,6 +316,9 @@ class Target:
     def mouse_none(self, event, x, y, flags, param):
         """Null function for mouse callback"""
         pass
+
+    def set_target_coords(self, coords):
+        self.ix, self.iy, self.fx, self.fy = coords
 
     def get_target_coords(self):
         """Get coordinates of defined target region"""
@@ -280,13 +348,15 @@ class Target:
         if buffer_mean < self.thresh:
             print "Trigger:",self.target_name, buffer_mean
             self.trigger_event()
+            #return "Trigger:",self.target_name, buffer_mean
+
 
     def trigger_event(self):
         pass
 
 def capture_grey(cap):
     ret,frame = cap.read()
-    if ret: 
+    if ret:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return ret,frame
     
