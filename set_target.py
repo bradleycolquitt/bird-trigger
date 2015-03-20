@@ -8,6 +8,8 @@ import pdb
 import numpy as np
 import multiprocessing as mp
 
+from collections import deque
+
 #import pyaudio
 #import wave
 
@@ -119,6 +121,7 @@ class SuperFeed:
         self.feeds = {}
         self.feeds_active = set()
         self.p = None
+        self.queue = mp.Queue()
 
     def add_feed(self, feed_name, device):
         self.feeds[device] = MainFeed(self, feed_name, device)
@@ -235,7 +238,7 @@ class MainFeed:
     def add_target(self, target_name):
         """Allows user to define target region using mouse"""
         if not target_name in self.targets:
-            target = Target(self.window_name, target_name, self.frame)
+            target = Target(self, self.window_name, target_name, self.frame)
             cv2.setMouseCallback(self.window_name,target.draw_rectangle)
             while(1):
                 cv2.imshow(self.window_name,self.frame)
@@ -254,7 +257,7 @@ class MainFeed:
 
     def define_target(self, target_name, positions):
         if not target_name in self.targets:
-            target = Target(self.window_name, target_name, self.frame)
+            target = Target(self, self.window_name, target_name, self.frame)
             target.set_target_coords(positions)
             self.targets[target_name] = target
         else:
@@ -264,8 +267,8 @@ class MainFeed:
         while(1):
             ret,self.frame = capture_grey(self.cap)
             if ret:
+                self.read_targets(self.parent.queue)
                 cv2.imshow(self.window_name, self.frame)
-                self.read_targets(mp.Queue)
             k = cv2.waitKey(50) & 0xFF
             if k == ESC:
                 break
@@ -291,11 +294,14 @@ class MainFeed:
     def read_targets(self, queue):
         if self.targets_active:
             for target in self.targets.itervalues():
-                val = target.check_target(self.frame)
+                cs = target.get_target_coords()
+                cv2.rectangle(self.frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
+                val = target.check_target_motion(self.frame)
                 queue.put(val)
 
 class Target:
-    def __init__(self, window_name, target_name, frame):
+    def __init__(self, parent, window_name, target_name, frame):
+        self.parent = parent
         self.window_name = window_name
         self.target_name = target_name
         self.frame = frame
@@ -303,6 +309,8 @@ class Target:
         self.thresh = 100
         self.buffer_size = 10
         self.buffer = np.zeros(self.buffer_size)
+
+        self.buffer_frame = deque(maxlen=3)
     
     def draw_rectangle(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -318,7 +326,13 @@ class Target:
         pass
 
     def set_target_coords(self, coords):
+        #pdb.set_trace()
         self.ix, self.iy, self.fx, self.fy = coords
+
+        #initialize frame deque
+        for i in range(2):
+            ret,frame = capture_grey(self.parent.cap)
+            self.buffer_frame.append(frame[coords[0]:coords[2], coords[1]:coords[3]])
 
     def get_target_coords(self):
         """Get coordinates of defined target region"""
@@ -330,25 +344,39 @@ class Target:
         coords = self.get_target_coords()
         return self.frame[coords[0]:coords[2], coords[1]:coords[3]]
 
-    # TODO buffer roi mean to prevent spurious triggering
     def check_target(self, frame):
         """Continually compute the mean pixel value within defined target
-        Trigger sound playback whenever mean exceeds threshold 
+        Trigger sound playback whenever mean exceeds threshold
         """
         cs = self.get_target_coords()
 
         cv2.rectangle(frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
-        #cv2.imshow(self.window_name, frame)
-
-        #roi_mean = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
         self.buffer = np.roll(self.buffer, -1)
         self.buffer[-1] = np.mean(np.mean(frame[cs[0]:cs[2], cs[1]:cs[3]], 0),0)
+
         buffer_mean = np.mean(self.buffer)
 
         if buffer_mean < self.thresh:
             print "Trigger:",self.target_name, buffer_mean
             self.trigger_event()
             #return "Trigger:",self.target_name, buffer_mean
+
+
+
+    def check_target_motion(self, frame):
+        """Continually compute the mean pixel value within defined target
+        Trigger sound playback whenever mean exceeds threshold
+        """
+        cs = self.get_target_coords()
+
+        self.buffer_frame.append(frame[cs[0]:cs[2], cs[1]:cs[3]])
+        motion = diff_image_ratio(self.buffer_frame)
+        #cv2.imshow(self.parent.window_name, motion)
+        changes = detect_motion(motion, 20)
+        if changes > 10:
+            print "Trigger:",self.target_name#, buffer_mean
+            self.trigger_event()
+            return "Trigger:",self.target_name#, buffer_mean
 
 
     def trigger_event(self):
@@ -359,7 +387,33 @@ def capture_grey(cap):
     if ret:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return ret,frame
-    
+
+def diff_image_ratio(images):
+    d1 = cv2.absdiff(images[0], images[1])
+    d2 = cv2.absdiff(images[1], images[2])
+    motion = cv2.bitwise_and(d1,d2)
+    motion = cv2.threshold(motion, 35, 255, cv2.THRESH_BINARY)
+    return cv2.erode(motion[1], np.ones((5,5),np.uint8))
+
+    #return np.sum(cv2.bitwise_and(d1,d2)) / np.prod(np.shape(d1))
+    #return cv2.bitwise_and(d1, d2)
+
+def diff_image_ratio2(images):
+    diffs = [cv2.absdiff(images[i],images[i+1]) for i in xrange(len(images)-1)]
+    return np.mean([np.mean(x) for x in diffs])
+    #return np.sum(cv2.bitwise_and(d1,d2)) / np.prod(np.shape(d1))
+    #return cv2.bitwise_and(d1, d2)
+
+def detect_motion(motion, max_deviation):
+    motion_mean = np.mean(motion)
+    motion_sd = np.std(motion)
+
+    number_of_changes = 0
+    if motion_sd < max_deviation:
+        number_of_changes = np.sum(motion[motion==255])
+
+    return number_of_changes
+
 def test_roi(target_obj):
     cs = target_obj.get_target_coords()
     print cs

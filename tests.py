@@ -39,4 +39,5 @@ def test_target_event(sf):
 
 def test_target_active(sf):
     sf.feeds[0].activate_targets()
+    sf.feeds[1].activate_targets()
     sf.start_all_feeds()
