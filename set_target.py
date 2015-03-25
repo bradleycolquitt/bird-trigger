@@ -2,6 +2,7 @@ import sys
 import Tkinter as tk
 import cv2
 import pdb
+import logging
 import numpy as np
 import multiprocessing as mp
 from collections import deque
@@ -16,6 +17,38 @@ ENTER=13
 ESC=27
 if PLATFORM == "linux2":
     ENTER = 10
+
+
+############# LOGGING ############
+
+module_logger = logging.getLogger("bird_trigger")
+module_logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#fh = logging.FileHandler('super.log')
+#fh.setLevel(logging.INFO)
+#formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#fh.setFormatter(formatter)
+#module_logger.addHandler(fh)
+#module_logger.info("Created SuperFeed, initialized logging.")
+
+# # create logger with 'spam_application'
+# logger = logging.getLogger('spam_application')
+# logger.setLevel(logging.DEBUG)
+# # create file handler which logs even debug messages
+# fh = logging.FileHandler('spam.log')
+# fh.setLevel(logging.DEBUG)
+# # create console handler with a higher log level
+# ch = logging.StreamHandler()
+# ch.setLevel(logging.ERROR)
+# # create formatter and add it to the handlers
+# formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# fh.setFormatter(formatter)
+# ch.setFormatter(formatter)
+# # add the handlers to the logger
+# logger.addHandler(fh)
+# logger.addHandler(ch)
+
+# logger.info('creating an instance of auxiliary_module.Auxiliary')
 
 class SuperGui(tk.Frame):
     def __init__(self):
@@ -118,12 +151,24 @@ class SuperFeed:
         # Consistent print out
         self.queue = mp.Queue()
 
+        ### Logging ###
+        self.superlog = logging.getLogger('bird_trigger.super')
+        self.superlog.setLevel(logging.DEBUG)
+        fh = logging.FileHandler('super.log')
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(formatter)
+        self.superlog.addHandler(fh)
+
+        self.superlog.info("Created SuperFeed, initialized logging.")
+
     def add_feed(self, feed_name, device):
         self.feeds[device] = MainFeed(self, feed_name, device)
+        self.superlog.info("Created feed, name: {0}, device: {1}".format(feed_name, device))
 
     def activate_feed(self, device):
         if not device in self.feeds_active:
             self.feeds_active.add(device)
+            self.superlog.info("Activated feed, name: {0}, device: {1}".format(self.feeds[device].feed_name, device))
             return 0
         else:
             return 1
@@ -131,18 +176,21 @@ class SuperFeed:
     def deactivate_feed(self, device):
         try:
             self.feeds_active.remove(device)
+            self.superlog.info("Deactivated feed, name: {0}, device: {1}".format(self.feeds[device].feed_name, device))
             return 0
         except KeyError:
             return 1
 
     def deactivate_all_feeds(self):
         self.feeds_active.clear()
+        self.superlog.info("Deactivated all feeds.")
 
     def start_all_feeds(self):
         if not self.p == None:
             self.stop_feeds()
         #self.queue = mp.Queue()
         self.p = mp.Process(target=self._start_all_feeds)
+        self.superlog.info("Started all feeds.")
         self.p.start()
         self.p.join()
         #print self.queue.get()
@@ -166,8 +214,10 @@ class SuperFeed:
             self.stop_feeds()
         self.queue = mp.Queue()
         self.p = mp.Process(target=self._start_subset_feeds, args=(self.queue,))
+        self.superlog.info("Started subset of feeds: {0}".format(self.feeds_active))
         self.p.start()
         self.p.join()
+        self.superlog.info("Stopped subset of feeds: {0}".format(self.feeds_active))
         #print self.queue.get()
         #while (self.p.is_alive()):
         #    print self.queue.get()
@@ -213,6 +263,14 @@ class MainFeed:
         self.targets_active = False
         self.cap = cv2.VideoCapture(device)
 
+        ### Logging ###
+        self.mainlog = logging.getLogger('bird_trigger.super.main' + str(self.device))
+        self.mainlog.setLevel(logging.DEBUG)
+        fh = logging.FileHandler('main{0}.log'.format(self.device))
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(formatter)
+        self.mainlog.addHandler(fh)
+
     def read(self):
         ret, self.frame = capture_grey(self.cap)
         return ret, self.frame
@@ -220,9 +278,11 @@ class MainFeed:
     ############## Target methods ###############
     def activate_targets(self):
          self.targets_active = True
+         self.mainlog.info("Activated all targets.")
 
     def deactivate_targets(self):
          self.targets_active = False
+         self.mainlog.info("Deactivated all targets.")
 
     # def start_feed(self):
     #     while(1):
