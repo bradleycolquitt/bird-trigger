@@ -11,7 +11,8 @@ def setup_two_feeds():
 
 def define_targets():
     sf = setup_two_feeds()
-    sf.feeds[0].define_target("target0", (45, 45, 200, 200))
+    sf.feeds[0].define_target("target0", (45, 45, 200, 200), "motion")
+    sf.feeds[0].define_target("target0-1", (250, 250, 400, 400), "detect")
     sf.feeds[1].define_target("target1", (45, 45, 200, 200))
     return sf
 
@@ -19,19 +20,12 @@ def test_start_all_feeds(sf):
     sf.start_all_feeds()
 
 def test_activate_feed(sf):
-    sf.feeds[0].activate_feed()
-    sf.start_subset_feed()
+    sf.activate_feed(0)
+    sf.start_subset_feeds()
 
 def test_activate2_feed(sf):
-    [sf.feeds[x].activate_feed() for x in [0,1]]
-    sf.start_subset_feed()
-
-def test_subprocess(sf):
-    sf.start_process()
-
-    time.sleep(5)
-
-    sf.stop_process()
+    [sf.activate_feed(x) for x in [0,1]]
+    sf.start_subset_feeds()
 
 def test_target_event(sf):
     sf.feeds[0].activate_targets()

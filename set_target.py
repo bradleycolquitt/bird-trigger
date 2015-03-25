@@ -1,18 +1,12 @@
 import sys
-
 import Tkinter as tk
 import cv2
-#import easygui
 import pdb
-
 import numpy as np
 import multiprocessing as mp
-
 from collections import deque
 
-#import pyaudio
-#import wave
-
+import triggers
 """
 
 """
@@ -53,8 +47,6 @@ class SuperGui(tk.Frame):
             feedgui = FeedGui(self, self.superfeed.feeds[device])
         except KeyError:
             print "Feed initialization failed."
-        #self.superfeed.add_feed()
-        #self.mainfeed = MainFeed()
 
     def launch_target_window(self):
         targetgui = TargetGui(self)
@@ -119,12 +111,29 @@ class SuperFeed:
     def __init__(self):
         self.window_name = "SuperFeed"
         self.feeds = {}
-        self.feeds_active = set()
+        self.feeds_active = set() # set of feed names
         self.p = None
+
+        # To hold results form individual feeds
+        # Consistent print out
         self.queue = mp.Queue()
 
     def add_feed(self, feed_name, device):
         self.feeds[device] = MainFeed(self, feed_name, device)
+
+    def activate_feed(self, device):
+        if not device in self.feeds_active:
+            self.feeds_active.add(device)
+            return 0
+        else:
+            return 1
+
+    def deactivate_feed(self, device):
+        try:
+            self.feeds_active.remove(device)
+            return 0
+        except KeyError:
+            return 1
 
     def deactivate_all_feeds(self):
         self.feeds_active.clear()
@@ -132,12 +141,13 @@ class SuperFeed:
     def start_all_feeds(self):
         if not self.p == None:
             self.stop_feeds()
-        self.queue = mp.Queue()
+        #self.queue = mp.Queue()
         self.p = mp.Process(target=self._start_all_feeds)
         self.p.start()
-
-        while (self.p.is_alive()):
-            pass
+        self.p.join()
+        #print self.queue.get()
+        #while (self.p.is_alive()):
+        #    pass
            # print self.queue.get()
 
     def _start_all_feeds(self):
@@ -146,7 +156,8 @@ class SuperFeed:
                 ret, frame = feed.read()
                 if ret:
                     feed.read_targets(self.queue)
-                    cv2.imshow(feed.window_name, frame)
+                    #print self.queue.get()
+                    cv2.imshow(feed.feed_name, frame)
             k = cv2.waitKey(1) & 0xFF
             if k == ESC: break
 
@@ -156,10 +167,10 @@ class SuperFeed:
         self.queue = mp.Queue()
         self.p = mp.Process(target=self._start_subset_feeds, args=(self.queue,))
         self.p.start()
-
-        while (self.p.is_alive()):
-            print self.queue.get()
-
+        self.p.join()
+        #print self.queue.get()
+        #while (self.p.is_alive()):
+        #    print self.queue.get()
 
     def _start_subset_feeds(self, queue):
         if len(self.feeds_active) > 0:
@@ -167,8 +178,8 @@ class SuperFeed:
                 for device in self.feeds_active:
                     ret, frame = self.feeds[device].read()
                     if ret:
-                        feed.read_targets()
-                        cv2.imshow(self.feeds[device].window_name, frame)
+                        self.feeds[device].read_targets(self.queue)
+                        cv2.imshow(self.feeds[device].feed_name, frame)
                 k = cv2.waitKey(1) & 0xFF
                 if k == ESC: break
         else:
@@ -179,7 +190,7 @@ class SuperFeed:
             for feed in self.feeds.itervalues():
                 ret, frame = feed.read()
                 if ret:
-                    cv2.imshow(feed.window_name, frame)
+                    cv2.imshow(feed.feed_name, frame)
                     feed.read_targets()
             k = cv2.waitKey(1) & 0xFF
             if k == ESC: break
@@ -194,7 +205,7 @@ class SuperFeed:
 class MainFeed:
     def __init__(self, parent, feed_name, device=0):
         self.parent = parent
-        self.window_name = feed_name
+        self.feed_name = feed_name
         self.device = device
         self.frame = None
         self.gui = None
@@ -206,48 +217,35 @@ class MainFeed:
         ret, self.frame = capture_grey(self.cap)
         return ret, self.frame
 
-    def activate_feed(self):
-        if not self.device in self.parent.feeds_active:
-            self.parent.feeds_active.add(self.device)
-            return 0
-        else:
-            return 1
-
-    def deactivate_feed(self):
-        try:
-            self.parent.feeds_active.remove(self.device)
-            return 0
-        except KeyError:
-            return 1
-
+    ############## Target methods ###############
     def activate_targets(self):
          self.targets_active = True
 
     def deactivate_targets(self):
          self.targets_active = False
 
-    def start_feed(self):
-        while(1):
-            ret,self.frame = capture_grey(self.cap)
-            if ret:
-                cv2.imshow(self.window_name,self.frame)
-            k = cv2.waitKey(50) & 0xFF
-            if k == ENTER or k == ESC:
-                break
+    # def start_feed(self):
+    #     while(1):
+    #         ret,self.frame = capture_grey(self.cap)
+    #         if ret:
+    #             cv2.imshow(self.feed_name,self.frame)
+    #         k = cv2.waitKey(50) & 0xFF
+    #         if k == ENTER or k == ESC:
+    #             break
 
-    def add_target(self, target_name):
+    def add_target(self, target_name, mode="motion"):
         """Allows user to define target region using mouse"""
         if not target_name in self.targets:
-            target = Target(self, self.window_name, target_name, self.frame)
-            cv2.setMouseCallback(self.window_name,target.draw_rectangle)
+            target = Target(self, self.feed_name, target_name, self.frame, mode)
+            cv2.setMouseCallback(self.feed_name,target.draw_rectangle)
             while(1):
-                cv2.imshow(self.window_name,self.frame)
+                cv2.imshow(self.feed_name,self.frame)
                 k = cv2.waitKey(60) & 0xFF
                 if k == ESC:
                     break
                     #return 1
                 elif k == ENTER:
-                    cv2.setMouseCallback(self.window_name,target.mouse_none)
+                    cv2.setMouseCallback(self.feed_name,target.mouse_none)
                     self.targets[target_name] = target
                     print target.get_target_coords()
                     return 0
@@ -255,9 +253,10 @@ class MainFeed:
             print "Target name exists. Choose another."
             return 1
 
-    def define_target(self, target_name, positions):
+    def define_target(self, target_name, positions, mode="motion"):
+        """Target defined by given positions"""
         if not target_name in self.targets:
-            target = Target(self, self.window_name, target_name, self.frame)
+            target = Target(self, self.feed_name, target_name, self.frame, mode)
             target.set_target_coords(positions)
             self.targets[target_name] = target
         else:
@@ -268,8 +267,8 @@ class MainFeed:
             ret,self.frame = capture_grey(self.cap)
             if ret:
                 self.read_targets(self.parent.queue)
-                cv2.imshow(self.window_name, self.frame)
-            k = cv2.waitKey(50) & 0xFF
+                cv2.imshow(self.feed_name, self.frame)
+            k = cv2.waitKey(1) & 0xFF
             if k == ESC:
                 break
 
@@ -279,30 +278,31 @@ class MainFeed:
         else:
             print "Monitoring not running."
 
-    def start_targets_worker(self):
-        while(1):
-            ret,self.frame = capture_grey(self.cap)
-            if ret:
-                cv2.imshow(self.window_name, self.frame)
-                [target.check_target(self.frame)
-                      for target in self.targets.itervalues()]
-                k = cv2.waitKey(200) & 0xFF
-                if k == 27:
-                    cv2.destroyAllWindows()
-                    break
+    # def start_targets_worker(self):
+    #     while(1):
+    #         ret,self.frame = capture_grey(self.cap)
+    #         if ret:
+    #             cv2.imshow(self.feed_name, self.frame)
+    #             [target.check_target(self.frame)
+    #                   for target in self.targets.itervalues()]
+    #             k = cv2.waitKey(200) & 0xFF
+    #             if k == 27:
+    #                 cv2.destroyAllWindows()
+    #                 break
 
     def read_targets(self, queue):
         if self.targets_active:
+            val = None
             for target in self.targets.itervalues():
                 cs = target.get_target_coords()
                 cv2.rectangle(self.frame,(cs[0], cs[1]), (cs[2], cs[3]), (255, 0, 0), 1)
-                val = target.check_target_motion(self.frame)
+                val = target.check_target(self.frame)
                 queue.put(val)
 
 class Target:
-    def __init__(self, parent, window_name, target_name, frame):
+    def __init__(self, parent, feed_name, target_name, frame, mode):
         self.parent = parent
-        self.window_name = window_name
+        self.feed_name = feed_name
         self.target_name = target_name
         self.frame = frame
         self.ix, self.iy, self.fx, self.fy = -1,-1,-1,-1
@@ -311,10 +311,11 @@ class Target:
         self.buffer = np.zeros(self.buffer_size)
 
         self.buffer_frame = deque(maxlen=3)
-    
+        self.mode = mode
+
     def draw_rectangle(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            cv2.imshow(self.window_name,self.frame)
+            cv2.imshow(self.feed_name,self.frame)
             self.ix,self.iy = x,y
 
         elif event == cv2.EVENT_LBUTTONUP:
@@ -345,6 +346,12 @@ class Target:
         return self.frame[coords[0]:coords[2], coords[1]:coords[3]]
 
     def check_target(self, frame):
+        if self.mode == "detect":
+            return self.check_target_detect(frame)
+        elif self.mode == "motion":
+            return self.check_target_motion(frame)
+
+    def check_target_detect(self, frame):
         """Continually compute the mean pixel value within defined target
         Trigger sound playback whenever mean exceeds threshold
         """
@@ -359,25 +366,20 @@ class Target:
         if buffer_mean < self.thresh:
             print "Trigger:",self.target_name, buffer_mean
             self.trigger_event()
-            #return "Trigger:",self.target_name, buffer_mean
-
-
+            return (self.target_name, buffer_mean)
 
     def check_target_motion(self, frame):
-        """Continually compute the mean pixel value within defined target
-        Trigger sound playback whenever mean exceeds threshold
-        """
+        """Compute absolute difference between series of images to detect motion"""
         cs = self.get_target_coords()
 
         self.buffer_frame.append(frame[cs[0]:cs[2], cs[1]:cs[3]])
         motion = diff_image_ratio(self.buffer_frame)
-        #cv2.imshow(self.parent.window_name, motion)
         changes = detect_motion(motion, 20)
-        if changes > 10:
-            print "Trigger:",self.target_name#, buffer_mean
-            self.trigger_event()
-            return "Trigger:",self.target_name#, buffer_mean
 
+        if changes > 10:
+            print "Trigger:",self.target_name, changes
+            self.trigger_event()
+            return (self.target_name, changes)
 
     def trigger_event(self):
         pass
@@ -429,38 +431,3 @@ def test_roi(target_obj):
         if k == 27:
             cv2.destroyAllWindows()
             break
-
-
-def trigger_playback():
-    chunk = 1024
-    wav = wave.open("/Users/bradcolquitt/projects/opencv/beep-01a.wav", "rb")
-    p = pyaudio.PyAudio()  
-    #open stream  
-    stream = p.open(format = p.get_format_from_width(wav.getsampwidth()),  
-                channels = wav.getnchannels(),  
-                rate = wav.getframerate(),  
-                output = True)  
-    #read data  
-    data = wav.readframes(chunk)  
-
-    #paly stream  
-    while data != '':  
-        stream.write(data)  
-        data = wav.readframes(chunk)  
-
-    #stop stream  
-    stream.stop_stream()  
-    stream.close()  
-
-    #close PyAudio  
-    p.terminate()  
-
-#target_obj = Target()
-#target_coords = target_obj.set_target()
-#print target_coords
-#roi = target_obj.get_roi_pixels()
-#print target_obj.get_target_coords()
-
-
-
-
